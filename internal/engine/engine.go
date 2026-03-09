@@ -57,13 +57,14 @@ func (e *Engine) Run() error {
 	}
 
 	e.logger.Info("engine started, running full DAG build")
+
+	// Print the DAG tree before first build
+	e.dag.PrintTree()
+
 	e.startFullBuild()
 
-	// Now receives actual file path
 	for changedFile := range trigger {
-		e.logger.Info("change detected",
-			"file", changedFile,
-		)
+		e.logger.Info("change detected", "file", changedFile)
 		e.handleChange(changedFile)
 	}
 

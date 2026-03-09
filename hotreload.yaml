@@ -1,0 +1,16 @@
+exec: "./bin/testserver"
+nodes:
+  - name: utils
+    path: ./testserver/utils
+    build: "echo building utils"
+    deps: []
+
+  - name: db
+    path: ./testserver/db
+    build: "echo building db"
+    deps: [utils]
+
+  - name: server
+    path: ./testserver
+    build: "go build -o ./bin/testserver ./testserver"
+    deps: [db]

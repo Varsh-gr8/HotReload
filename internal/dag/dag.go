@@ -152,3 +152,46 @@ func (d *DAG) ExecuteDirtyOnly(ctx context.Context, fn BuildFunc) error {
 	}
 	return d.Execute(ctx, fn)
 }
+
+func (d *DAG) PrintTree() {
+	d.logger.Info("DAG execution tree")
+	roots := d.RootNodes()
+	for _, root := range roots {
+		d.printNode(root, "", true)
+	}
+}
+
+func (d *DAG) printNode(node *Node, prefix string, isLast bool) {
+	connector := "├──"
+	if isLast {
+		connector = "└──"
+	}
+
+	if prefix == "" {
+		d.logger.Info("node",
+			"name", node.Name,
+			"path", node.Path,
+			"build", node.Build,
+		)
+	} else {
+		d.logger.Info(prefix+connector+" "+node.Name,
+			"build", node.Build,
+		)
+	}
+
+	children := d.edges[node.Name]
+	for i, childName := range children {
+		child := d.Nodes[childName]
+		newPrefix := prefix
+		if prefix == "" {
+			newPrefix = "    "
+		} else {
+			if isLast {
+				newPrefix = prefix + "    "
+			} else {
+				newPrefix = prefix + "│   "
+			}
+		}
+		d.printNode(child, newPrefix, i == len(children)-1)
+	}
+}
