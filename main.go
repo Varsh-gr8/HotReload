@@ -5,45 +5,86 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"os/signal"
+	"syscall"
+
+	"github.com/Varsh-gr8/HotReload/internal/dag"
+	"github.com/Varsh-gr8/HotReload/internal/engine"
 )
 
 func main() {
-	// -------------------
-	// 1. Parse CLI arguments
-	// -------------------
-	rootDir := flag.String("root", ".", "Directory to watch for file changes")
-	buildCmd := flag.String("build", "", "Command used to build the project")
-	execCmd := flag.String("exec", "", "Command used to run the server")
+	rootDir := flag.String("root", ".", "Directory to watch")
+	buildCmd := flag.String("build", "", "Build command")
+	execCmd := flag.String("exec", "", "Exec command")
+	configFile := flag.String("config", "hotreload.yaml", "Path to config file")
 	flag.Parse()
 
-	if *buildCmd == "" || *execCmd == "" {
-		fmt.Println("Error: --build and --exec commands are required")
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	d := dag.New(logger)
+
+	// Try loading yaml config first
+	cfg, err := loadConfig(*configFile)
+	if err == nil {
+		// YAML config found — build DAG from it
+		logger.Info("loading config", "file", *configFile)
+		for _, n := range cfg.Nodes {
+			d.AddNode(&dag.Node{
+				Name:  n.Name,
+				Path:  n.Path,
+				Build: n.Build,
+				Deps:  n.Deps,
+			})
+		}
+		*execCmd = cfg.Exec
+	} else {
+		// No config — fall back to single node from flags
+		if *buildCmd == "" || *execCmd == "" {
+			fmt.Fprintln(os.Stderr, "Error: --build and --exec are required when no config file is present")
+			fmt.Fprintln(os.Stderr, "Usage: hotreload --root <dir> --build <cmd> --exec <cmd>")
+			fmt.Fprintln(os.Stderr, "       hotreload --config hotreload.yaml")
+			os.Exit(1)
+		}
+		logger.Info("no config file found, using single node DAG from flags")
+		d.AddNode(&dag.Node{
+			Name:  "root",
+			Path:  *rootDir,
+			Build: *buildCmd,
+			Deps:  []string{},
+		})
+	}
+
+	if err := d.Build(); err != nil {
+		logger.Error("failed to build DAG", "error", err)
 		os.Exit(1)
 	}
 
-	// -------------------
-	// 2. Setup logging
-	// -------------------
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	logger.Info("Starting HotReload Engine")
-	logger.Info("Root directory", "dir", *rootDir)
-	logger.Info("Build command", "cmd", *buildCmd)
-	logger.Info("Exec command", "cmd", *execCmd)
+	logger.Info("DAG initialized", "nodes", len(d.Nodes))
 
-	// -------------------
-	// 3. Initialize workspace directory
-	// -------------------
-	workspaceDir := filepath.Join(".", "hotreload_workspace")
-	err := os.MkdirAll(workspaceDir, os.ModePerm)
+	eng, err := engine.New(*rootDir, *execCmd, d, logger)
 	if err != nil {
-		logger.Error("Failed to create workspace", "error", err)
+		logger.Error("failed to initialize engine", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("Workspace initialized", "workspace", workspaceDir)
 
-	// -------------------
-	// Step 0 complete
-	// -------------------
-	logger.Info("Step 0 complete: CLI parsed and workspace ready")
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	engineErr := make(chan error, 1)
+	go func() {
+		engineErr <- eng.Run()
+	}()
+
+	select {
+	case sig := <-quit:
+		logger.Info("shutdown signal received", "signal", sig.String())
+		os.Exit(0)
+	case err := <-engineErr:
+		if err != nil {
+			logger.Error("engine error", "error", err)
+			os.Exit(1)
+		}
+	}
 }
